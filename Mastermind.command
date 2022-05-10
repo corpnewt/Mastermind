@@ -16,6 +16,28 @@ use_py3="TRUE"
 
 tempdir=""
 
+compare_to_version () {
+    # Compares our OS version to the passed OS version, and
+    # return a 1 if we match the passed compare type, or a 0 if we don't.
+    # $1 = 0 (equal), 1 (greater), 2 (less), 3 (gequal), 4 (lequal)
+    # $2 = OS version to compare ours to
+    if [ "$1" == "" ] || [ "$2" == "" ]; then
+        # Missing info - bail.
+        return
+    fi
+    local current_os= comp=
+    current_os="$(sw_vers -productVersion)"
+    comp="$(vercomp "$current_os" "$1")"
+    # Check gequal and lequal first
+    if [[ "$1" == "3" && ("$comp" == "1" || "$comp" == "0") ]] || [[ "$1" == "4" && ("$comp" == "2" || "$comp" == "0") ]] || [[ "$comp" == "$1" ]]; then
+        # Matched
+        echo 1
+    else
+        # No match
+        echo 0
+    fi
+}
+
 set_use_py3_if () {
     # Auto sets the "use_py3" variable based on
     # conditions passed
@@ -26,19 +48,15 @@ set_use_py3_if () {
         # Missing vars - bail with no changes.
         return
     fi
-    local current_os= comp=
-    current_os="$(sw_vers -productVersion)"
-    comp="$(vercomp "$current_os" "$2")"
-    # Check gequal and lequal first
-    if [[ "$1" == "3" && ("$comp" == "1" || "$comp" == "0") ]] || [[ "$1" == "4" && ("$comp" == "2" || "$comp" == "0") ]] || [[ "$comp" == "$1" ]]; then
+    if [ "$(compare_to_version "$1" "$2")" == "1" ]; then
         use_py3="$3"
     fi
 }
 
 get_remote_py_version () {
     local pyurl= py_html= py_vers= py_num="3"
-    pyurl="https://www.python.org/downloads/mac-osx/"
-    py_html="$(curl -v $pyurl 2>&1)"
+    pyurl="https://www.python.org/downloads/macos/"
+    py_html="$(curl -L $pyurl 2>&1)"
     if [ "$use_py3" == "" ]; then
         use_py3="TRUE"
     fi
@@ -67,7 +85,11 @@ download_py () {
     echo "Located Version:  $vers"
     echo
     echo "Building download url..."
-    url="https://www.python.org/ftp/python/$vers/python-$vers-macosx10.9.pkg"
+    url="$(curl -L https://www.python.org/downloads/release/python-${vers//./}/ 2>&1 | grep -iE "python-$vers-macos.*.pkg\"" | awk -F'"' '{ print $2 }')"
+    if [ "$url" == "" ]; then
+        # Couldn't get the URL - bail
+        print_error
+    fi
     echo " - $url"
     echo
     echo "Downloading..."
@@ -105,6 +127,7 @@ download_py () {
     # Now we check for py again
     echo "Rechecking py..."
     downloaded="TRUE"
+    clear
     main
 }
 
@@ -123,7 +146,7 @@ print_error() {
     echo
     echo "Python is not installed or not found in your PATH var."
     echo
-    echo "Please go to https://www.python.org/downloads/mac-osx/"
+    echo "Please go to https://www.python.org/downloads/macos/"
     echo "to download and install the latest version."
     echo
     exit 1
@@ -173,7 +196,7 @@ vercomp () {
             return
         fi
     done
-    return 0
+    echo "0"
 }
 
 get_local_python_version() {
@@ -184,19 +207,19 @@ get_local_python_version() {
         py_name="python3"
     fi
     py_list="$(which -a "$py_name" 2>/dev/null)"
-    # Build a newline separated list from the whereis output too
-    for python in "$(whereis "$py_name" 2>/dev/null)"; do
-        if [ "$py_list" == "" ]; then
-            py_list="$python"
-        else
-            py_list="$py_list${NL}$python"
-        fi
-    done
     # Walk that newline separated list
     while read python; do
         if [ "$python" == "" ]; then
             # Got a blank line - skip
             continue
+        fi
+        if [ "$check_py3_stub" == "1" ] && [ "$python" == "/usr/bin/python3" ]; then
+            # See if we have a valid developer path
+            xcode-select -p > /dev/null 2>&1
+            if [ "$?" != "0" ]; then
+                # /usr/bin/python3 path - but no valid developer dir
+                continue
+            fi
         fi
         python_version="$($python -V 2>&1 | cut -d' ' -f2 | grep -E "[\d.]+")"
         if [ "$python_version" == "" ]; then
@@ -245,7 +268,6 @@ prompt_and_download() {
 }
 
 main() {
-    clear
     python=
     version=
     # Verify our target exists
@@ -284,5 +306,8 @@ main() {
 # that can trip up some py3 detection in other scripts.
 # set_use_py3_if "3" "10.15" "FORCE"
 downloaded="FALSE"
+# Check for the aforementioned /usr/bin/python3 stub if
+# our OS version is 10.15 or greater.
+check_py3_stub="$(compare_to_version "3" "10.15")"
 trap cleanup EXIT
 main
